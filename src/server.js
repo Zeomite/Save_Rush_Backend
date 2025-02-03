@@ -1,6 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const morgan = require('morgan');
+const cors = require('cors');
 const routes = require('./routes');
 const connectDB = require('./utils/database'); // Import the database connection function
 
@@ -10,6 +11,7 @@ const app = express();
 connectDB();
 
 // Middleware
+app.use(cors());
 app.use(bodyParser.json());
 app.use(morgan('dev'));
 

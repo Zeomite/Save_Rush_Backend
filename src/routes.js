@@ -9,6 +9,7 @@ const orderRouter = require('./services/order-service/orderRouter');
 const paymentRouter = require('./services/payment-service/paymentRouter');
 const userRouter = require('./services/user-service/userRouter');
 const vendorRouter = require('./services/vendor-service/vendorRouter');
+const authRouter = require('./routes/authRoutes');
 
 // Use service routers
 router.use('/cart', cartRouter);
@@ -18,5 +19,6 @@ router.use('/order', orderRouter);
 router.use('/payment', paymentRouter);
 router.use('/user', userRouter);
 router.use('/vendor', vendorRouter);
+router.use('/auth', authRouter);
 
 module.exports = router;
