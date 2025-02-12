@@ -4,7 +4,6 @@ const twilio = require('twilio');
 // Email Configuration
 const createEmailTransporter = () => {
     try {
-        // Validate email credentials
         if (!process.env.EMAIL_USERNAME || !process.env.EMAIL_PASSWORD) {
             console.error('Email credentials are missing in environment variables!');
             console.log('EMAIL_USERNAME:', process.env.EMAIL_USERNAME ? 'Present' : 'Missing');
@@ -12,7 +11,6 @@ const createEmailTransporter = () => {
             return null;
         }
 
-        // Create transporter with Gmail settings
         return nodemailer.createTransport({
             service: 'gmail',
             host: 'smtp.gmail.com',
@@ -22,7 +20,7 @@ const createEmailTransporter = () => {
                 user: process.env.EMAIL_USERNAME,
                 pass: process.env.EMAIL_PASSWORD
             },
-            debug: true // Enable debug logs
+            debug: true
         });
     } catch (error) {
         console.error('Error creating email transporter:', error);
@@ -30,15 +28,11 @@ const createEmailTransporter = () => {
     }
 };
 
-// Initialize email transporter
 const emailTransporter = createEmailTransporter();
-
-// Initialize Twilio client
 const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
     ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
     : null;
 
-// Verify email transport configuration
 const verifyEmailConfig = async () => {
     try {
         if (!emailTransporter) {
@@ -53,30 +47,22 @@ const verifyEmailConfig = async () => {
     }
 };
 
-// Call verification on startup
-verifyEmailConfig().catch(console.error);
-
-// Generate OTP
+// Generic utility functions
 const generateOTP = () => {
     return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
-// Format phone number to ensure it has country code
 const formatPhoneNumber = (phoneNumber) => {
-    // Remove any non-digit characters
     const cleaned = phoneNumber.replace(/\D/g, '');
     
-    // If number doesn't start with +91 and is an Indian number (10 digits)
     if (cleaned.length === 10) {
         return `+91${cleaned}`;
     }
     
-    // If number already has country code but missing +
     if (cleaned.startsWith('91') && cleaned.length === 12) {
         return `+${cleaned}`;
     }
     
-    // If number already has + prefix, return as is
     if (phoneNumber.startsWith('+')) {
         return phoneNumber;
     }
@@ -84,8 +70,41 @@ const formatPhoneNumber = (phoneNumber) => {
     return `+${cleaned}`;
 };
 
-// Send OTP via Twilio Verify
-const sendSMSOTP = async (phoneNumber, otp = null) => {
+// New generic notification functions
+const sendEmail = async (to, subject, htmlContent) => {
+    try {
+        if (!emailTransporter) {
+            throw new Error('Email transporter not initialized. Please check your email configuration.');
+        }
+
+        const isConfigValid = await verifyEmailConfig();
+        if (!isConfigValid) {
+            throw new Error('Email configuration is invalid');
+        }
+
+        const mailOptions = {
+            from: {
+                name: 'Save Rush',
+                address: process.env.EMAIL_USERNAME
+            },
+            to,
+            subject,
+            html: htmlContent
+        };
+
+        const info = await emailTransporter.sendMail(mailOptions);
+        console.log('Email sent successfully:', info.messageId);
+        return true;
+    } catch (error) {
+        console.error('Error sending email:', error);
+        if (error.code === 'EAUTH') {
+            console.error('Authentication failed. Please check your email credentials.');
+        }
+        throw new Error(`Failed to send email: ${error.message}`);
+    }
+};
+
+const sendSMS = async (to, message) => {
     try {
         if (!twilioClient) {
             throw new Error('Twilio configuration is missing');
@@ -95,10 +114,8 @@ const sendSMSOTP = async (phoneNumber, otp = null) => {
             throw new Error('Twilio Verify Service SID is not configured');
         }
 
-        // Format the phone number to ensure it has country code
-        const formattedPhoneNumber = formatPhoneNumber(phoneNumber);
+        const formattedPhoneNumber = formatPhoneNumber(to);
 
-        // Start verification with custom message
         const verification = await twilioClient.verify.v2
             .services(process.env.TWILIO_VERIFY_SERVICE_SID)
             .verifications
@@ -106,22 +123,46 @@ const sendSMSOTP = async (phoneNumber, otp = null) => {
                 to: formattedPhoneNumber,
                 channel: 'sms',
                 channelConfiguration: {
-                    template: 'Your Save Rush verification code is: {{code}}. Valid for 10 minutes. Do not share this code with anyone.'
+                    template: message
                 }
             });
 
         return {
             status: verification.status,
             valid: true,
-            message: 'Save Rush verification code sent successfully'
+            message: 'SMS sent successfully'
         };
     } catch (error) {
-        console.error('Error sending SMS verification:', error.message);
-        throw new Error(`Failed to send SMS verification: ${error.message}`);
+        console.error('Error sending SMS:', error.message);
+        throw new Error(`Failed to send SMS: ${error.message}`);
     }
 };
 
-// Verify Phone OTP
+// Backward compatible functions using new generic functions
+const sendEmailOTP = async (email, otp, subject = 'Save Rush - Email Verification Code', customHtml = null) => {
+    const defaultHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h1 style="color: #2c3e50; text-align: center;">Email Verification</h1>
+            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px; margin: 20px 0;">
+                <p style="font-size: 16px;">Your verification code is:</p>
+                <h2 style="color: #2c3e50; text-align: center; font-size: 32px; letter-spacing: 5px;">${otp}</h2>
+                <p style="color: #666; font-size: 14px;">This code will expire in 10 minutes.</p>
+                <p style="color: #666; font-size: 14px;">Please enter this code in the verification page to verify your email address.</p>
+            </div>
+            <p style="color: #666; font-size: 12px; text-align: center;">
+                If you didn't request this verification code, please ignore this email.
+            </p>
+        </div>
+    `;
+
+    return sendEmail(email, subject, customHtml || defaultHtml);
+};
+
+const sendSMSOTP = async (phoneNumber, otp = null) => {
+    const message = 'Your Save Rush verification code is: {{code}}. Valid for 10 minutes. Do not share this code with anyone.';
+    return sendSMS(phoneNumber, message);
+};
+
 const verifyPhoneOTP = async (phoneNumber, code) => {
     try {
         console.log('Starting phone verification process...');
@@ -134,7 +175,6 @@ const verifyPhoneOTP = async (phoneNumber, code) => {
             throw new Error('Twilio Verify Service SID is not configured');
         }
 
-        // Format the phone number to ensure it has country code
         const formattedPhoneNumber = formatPhoneNumber(phoneNumber);
         console.log('Formatted phone number:', formattedPhoneNumber);
 
@@ -162,7 +202,6 @@ const verifyPhoneOTP = async (phoneNumber, code) => {
             details: error.details
         });
         
-        // Handle specific Twilio error cases
         if (error.code === 20404) {
             throw new Error('Verification code has expired or is invalid');
         } else if (error.code === 60200) {
@@ -174,54 +213,6 @@ const verifyPhoneOTP = async (phoneNumber, code) => {
         }
         
         throw new Error(`Failed to verify phone code: ${error.message}`);
-    }
-};
-
-// Send OTP via Email
-const sendEmailOTP = async (email, otp, subject = 'Save Rush - Email Verification Code', customHtml = null) => {
-    try {
-        if (!emailTransporter) {
-            throw new Error('Email transporter not initialized. Please check your email configuration.');
-        }
-
-        // Verify configuration before sending
-        const isConfigValid = await verifyEmailConfig();
-        if (!isConfigValid) {
-            throw new Error('Email configuration is invalid');
-        }
-
-        const mailOptions = {
-            from: {
-                name: 'Save Rush',
-                address: process.env.EMAIL_USERNAME
-            },
-            to: email,
-            subject: subject,
-            html: customHtml || `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                    <h1 style="color: #2c3e50; text-align: center;">Email Verification</h1>
-                    <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px; margin: 20px 0;">
-                        <p style="font-size: 16px;">Your verification code is:</p>
-                        <h2 style="color: #2c3e50; text-align: center; font-size: 32px; letter-spacing: 5px;">${otp}</h2>
-                        <p style="color: #666; font-size: 14px;">This code will expire in 10 minutes.</p>
-                        <p style="color: #666; font-size: 14px;">Please enter this code in the verification page to verify your email address.</p>
-                    </div>
-                    <p style="color: #666; font-size: 12px; text-align: center;">
-                        If you didn't request this verification code, please ignore this email.
-                    </p>
-                </div>
-            `
-        };
-
-        const info = await emailTransporter.sendMail(mailOptions);
-        console.log('Email sent successfully:', info.messageId);
-        return true;
-    } catch (error) {
-        console.error('Error sending email:', error);
-        if (error.code === 'EAUTH') {
-            console.error('Authentication failed. Please check your email credentials.');
-        }
-        throw new Error(`Failed to send email: ${error.message}`);
     }
 };
 
@@ -240,8 +231,13 @@ const sendEmailOTP = async (email, otp, subject = 'Save Rush - Email Verificatio
 })();
 
 module.exports = {
+    // Original exports for backward compatibility
     generateOTP,
     sendEmailOTP,
     sendSMSOTP,
-    verifyPhoneOTP
+    verifyPhoneOTP,
+    
+    // New generic functions
+    sendEmail,
+    sendSMS
 };
