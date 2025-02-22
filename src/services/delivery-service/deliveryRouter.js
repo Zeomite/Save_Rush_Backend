@@ -1,12 +1,4 @@
-<<<<<<< HEAD
-const express = require('express');
-const deliveryRouter = express.Router();
 
-
-
-
-module.exports = deliveryRouter;
-=======
 const express = require('express');
 const deliveryRouter = express.Router();
 const deliveryController = require('./deliveryController');
@@ -18,4 +10,3 @@ deliveryRouter.post('/publish-assignment-request', deliveryController.publishDel
 deliveryRouter.post('/accept-assignment', deliveryController.acceptDeliveryAssignment);
 
 module.exports = deliveryRouter;
->>>>>>> features
