@@ -11,12 +11,12 @@ const userRouter = require('./services/user-service/userRouter');
 const vendorRouter = require('./services/vendor-service/vendorRouter');
 
 // Use service routers
-router.use('/cart', cartRouter);
-router.use('/delivery', deliveryRouter);
-router.use('/inventory', invenRouter);
-router.use('/order', orderRouter);
-router.use('/payment', paymentRouter);
-router.use('/user', userRouter);
-router.use('/vendor', vendorRouter);
+router.use('/api/users', userRouter);
+router.use('/api/orders', orderRouter);
+router.use('/api/vendors', vendorRouter);
+router.use('/api/cart', cartRouter);
+router.use('/api/delivery',deliveryRouter)
+//router.use('/api/payments', paymentRouter);
+router.use('/api/items', invenRouter);
 
 module.exports = router;
