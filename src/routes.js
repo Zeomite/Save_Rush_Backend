@@ -16,7 +16,7 @@ router.use('/orders', orderRouter);
 router.use('/vendors', vendorRouter);
 router.use('/cart', cartRouter);
 router.use('/delivery',deliveryRouter)
-//router.use('/payments', paymentRouter);
+router.use('/payments', paymentRouter);
 router.use('/items', invenRouter);
 
 module.exports = router;
