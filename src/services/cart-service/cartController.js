@@ -1,5 +1,6 @@
 const { getCachedDocument, cacheDocument, deleteCachedDocument } = require('../../utils/redisClient');
 const Cart = require('./cartModel');
+const Item = require('../inventory-service/inventoryModel');
 
 /**
  * Retrieve the cart for the current user.
@@ -16,17 +17,47 @@ exports.getCart = async (req, res) => {
     }
 
     // Fetch from MongoDB if not cached
-    let cart = await Cart.findOne({ user: userId });
-    if (!cart) {
+    const cart = await Cart.aggregate([
+      { $match: { user: userId } },
+      { $unwind: '$items' },
+      {
+        $lookup: {
+          from: 'items',
+          localField: 'items.product',
+          foreignField: '_id',
+          as: 'itemDetails'
+        }
+      },
+      { $unwind: '$itemDetails' },
+      {
+        $group: {
+          _id: '$_id',
+          user: { $first: '$user' },
+          items: {
+            $push: {
+              product: '$itemDetails',
+              quantity: '$items.quantity'
+            }
+          },
+          totalPrice: {
+            $sum: { $multiply: ['$items.quantity', '$itemDetails.price'] }
+          },
+          updatedAt: { $first: '$updatedAt' }
+        }
+      }
+    ]);
+
+    if (!cart.length) {
       // Create a new cart if one doesn't exist
-      cart = new Cart({ user: userId, items: [] });
-      await cart.save();
+      const newCart = new Cart({ user: userId, items: [] });
+      await newCart.save();
+      return res.json({ cart: newCart, cached: false });
     }
 
     // Cache the cart with a shorter TTL (e.g., 5 minutes)
-    await cacheDocument(cacheKey, 300, JSON.stringify(cart));
+    await cacheDocument(cacheKey, 300, JSON.stringify(cart[0]));
 
-    res.json({ cart, cached: false });
+    res.json({ cart: cart[0], cached: false });
   } catch (error) {
     console.error('Error fetching cart:', error);
     res.status(500).json({ message: 'Error fetching cart', error: error.message });
