@@ -101,38 +101,30 @@ exports.verifyEmailCode = async (req, res) => {
 
 exports.login = async (req, res) => {
   try {
-    const { uid, username, phoneNumber, role, email } = req.body;
-    if (!uid || !email) {
-      return res.status(400).json({ message: 'Firebase UID and email are required' });
+    const { uid, username, phoneNumber, role, location } = req.body;
+    if (!uid) {
+      return res.status(400).json({ message: 'Firebase UID is required' });
     }
 
-    // Check if a user already exists
-    const existingUser = await User.findOne({ 
-      $or: [{ phoneNumber }, { email }] 
-    });
-    
+    // Check if a user already exists with the given email, username, or phone number
+    const existingUser = await User.findOne({ phoneNumber: phoneNumber });
     if (existingUser) {
-      const token = generateToken(existingUser._id, existingUser.role);
-      return res.json({
-        message: "Login successful",
-        token,
-        user: existingUser
-      });
+      const token = generateToken(String(existingUser._id), role)
+      return res.status(400).json(...existingUser,token,{ message: "User already exists" });
     }
 
-    // Create new user without setting _id explicitly
     const newUser = new User({
+      _id: uid,
       username,
-      email,
-      role: role || 'customer',
+      role,
       phoneNumber
-    });
-    
+    })
     await newUser.save();
 
     const token = generateToken(newUser._id, newUser.role);
     res.status(201).json({
-      message: "User created successfully.",
+      message:
+        "User created successfully.",
       token,
       user: {
         id: newUser._id,
@@ -141,14 +133,11 @@ exports.login = async (req, res) => {
         phoneNumber: newUser.phoneNumber,
         role: newUser.role,
         isEmailVerified: newUser.isEmailVerified
-      }
-    });
+    }});
   } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ 
-      message: "Error creating user", 
-      error: error.message 
-    });
+    res
+      .status(500)
+      .json({ message: "Error creating user", error: error.message });
   }
 };
 

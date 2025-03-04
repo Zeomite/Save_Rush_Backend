@@ -55,7 +55,7 @@ exports.getCart = async (req, res) => {
     }
 
     // Cache the cart with a shorter TTL (e.g., 5 minutes)
-    await cacheDocument(cacheKey, 300, JSON.stringify(cart[0]));
+    await cacheDocument(cacheKey, JSON.stringify(cart[0]), 300);
 
     res.json({ cart: cart[0], cached: false });
   } catch (error) {
