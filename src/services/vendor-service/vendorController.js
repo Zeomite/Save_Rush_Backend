@@ -1,151 +1,223 @@
 const Vendor = require('./vendorModel');
 const Order = require('../../services/order-service/orderModel');
 const eventBus = require('../../utils/eventBus');
+const deliveryModel = require('../delivery-service/deliveryModel');
+
+// Global in-memory store for vendor lists per order.
+// Structure: { [orderId]: [vendorObject, vendorObject, ...] }
+const orderVendorLists = {};
 
 /**
- * In-memory pending acceptance map.
- * NOTE: In production, use a distributed lock or a shared cache instead.
- * Key format: `${orderId}:${vendorId}`
- */
-const pendingAcceptances = {};
-
-/**
- * Utility function that returns a promise which resolves if the vendor accepts
- * within the given timeout, and rejects on timeout.
- *
- * @param {String} orderId
- * @param {String} vendorId
- * @param {Number} timeout Timeout in milliseconds (default: 20000)
- */
-const waitForAcceptance = (orderId, vendorId, timeout = 20000) => {
-  return new Promise((resolve, reject) => {
-    const key = `${orderId}:${vendorId}`;
-    pendingAcceptances[key] = resolve;
-    setTimeout(() => {
-      if (pendingAcceptances[key]) {
-        delete pendingAcceptances[key];
-        reject(new Error('Timeout'));
-      }
-    }, timeout);
-  });
-};
-
-/**
- * Publish an order request to nearby vendors one-by-one.
+ * Initiate Order Request API
  * Expects in req.body:
- *  - orderId: The order to be assigned.
- *  - vendorProximityLocation: An object with a GeoJSON Point format:
- *      { coordinates: [longitude, latitude] }.
+ *   - orderId: The ID of the order.
+ *   - vendorProximityLocation: A GeoJSON Point object (e.g., { coordinates: [longitude, latitude] }).
  *
- * The process:
- * 1. Finds candidate vendors near the given location (e.g., within 10km).
- * 2. For each candidate, publishes a targeted event and waits up to 20 seconds for acceptance.
- * 3. Returns the first vendor that accepts the order.
+ * Process:
+ *   1. Find available vendors near the provided location (within 10 km) sorted by proximity.
+ *   2. Save the sorted list in memory (orderVendorLists) keyed by orderId.
+ *   3. Publish the order request to the first vendor on the list.
  */
-exports.publishOrderRequest = async (req, res) => {
-  try {
-    const { orderId, vendorProximityLocation } = req.body;
-    
-    // Find candidate vendors near the provided location.
-    // Adjust $maxDistance (in meters) as needed.
-    const candidates = await Vendor.find({
+exports.initiateOrderRequest = async (orderId, vendorProximityLocation) =>{
+  try{
+    // Find candidate vendors sorted by distance (within 10 km)
+    const vendors = await Vendor.find({
       isAvailable: true,
       currentLocation: {
         $near: {
           $geometry: { type: 'Point', coordinates: vendorProximityLocation.coordinates },
-          $maxDistance: 10000 // within 10 km
+          $maxDistance: 10000
         }
       }
     });
     
-    if (candidates.length === 0) {
+    if (!vendors || vendors.length === 0) {
       return res.status(404).json({ message: 'No nearby vendors available' });
     }
     
-    let acceptedVendor = null;
+    // Save the sorted vendor list for this order in our in-memory map.
+    orderVendorLists[orderId] = vendors;
     
-    // Iterate through candidates sequentially.
-    for (const vendor of candidates) {
-      // Publish a targeted event to the vendor (using a channel naming convention).
-      await eventBus.publish(`order_request_to_vendor_${vendor._id}`, {
-        orderId,
-        vendorProximityLocation,
-        timeout: 20000 // inform vendor of the 20-second window
-      });
-      
-      try {
-        // Wait for the vendor to accept within 20 seconds.
-        await waitForAcceptance(orderId, vendor._id, 20000);
-        acceptedVendor = vendor;
-        break; // Stop on first acceptance.
-      } catch (err) {
-        // Timeout for this vendor—proceed to the next candidate.
-        continue;
-      }
-    }
+    // Publish to the first vendor in the list.
+    const firstVendor = vendors[0];
+    await eventBus.publish(`order_request_to_vendor_${firstVendor._id}`, {
+      orderId,
+      vendorList: vendors.map(v => v._id), // send only vendor IDs if desired
+    });
     
-    if (!acceptedVendor) {
-      return res.status(404).json({ message: 'No vendor accepted the order within the time window' });
-    }
-    
-    // Return the accepted vendor's details.
-    return res.json({ message: 'Vendor accepted the order', vendor: acceptedVendor });
+    return res.json({
+      message: 'Order request initiated and sent to first vendor',
+      vendorList: vendors.map(v => v._id),
+    });
   } catch (error) {
-    console.error('Error publishing order request:', error);
-    return res.status(500).json({ message: 'Error publishing order request', error: error.message });
+    console.error('Error initiating order request:', error);
+    return res.status(500).json({ message: 'Error initiating order request', error: error.message });
   }
 };
 
 /**
- * Endpoint for a vendor to accept an order.
+ * Accept Order Request API
  * Expects in req.body:
- *  - orderId: The ID of the order to accept.
- *  - vendorId: The ID of the vendor accepting the order.
- *  - vendorLocation: The vendor's current location (GeoJSON Point: { coordinates: [lng, lat] }).
+ *   - orderId: The ID of the order.
+ *   - vendorId: The vendor's ID (should match the first vendor in the list).
+ *   - vendorLocation: The vendor's current location as a GeoJSON Point.
  *
- * This function uses an atomic update so that only one vendor can claim the order.
- * If the update succeeds:
- *  - The order is updated with the vendor's details and marked as 'vendor_accepted'.
- *  - The vendor is marked as unavailable.
- *  - The pending acceptance is resolved.
- *  - An event is published to notify downstream systems.
+ * Process:
+ *   - Atomically update the order schema: set status to 'accepted' and record vendor info.
  */
 exports.acceptOrderRequest = async (req, res) => {
   try {
-    const { orderId, vendorId, vendorLocation } = req.body;
+    const { orderId, vendorId } = req.body;
     
-    // Atomically update the order only if no vendor has been assigned.
+    // Atomically update the order (only if no vendor has been assigned yet)
     const updatedOrder = await Order.findOneAndUpdate(
       { _id: orderId, vendor: { $exists: false } },
-      { vendor: vendorId, vendorLocation, status: 'vendor_accepted', updatedAt: new Date() },
+      { vendor: vendorId , status: 'vendor_accepted', updatedAt: new Date() },
       { new: true }
     );
     
     if (!updatedOrder) {
-      return res.status(400).json({ message: 'Order already accepted by another vendor or not found' });
+      return res.status(400).json({ message: 'Order already accepted or not found' });
     }
     
-    // Mark the vendor as busy.
+    // Mark the vendor as busy
     await Vendor.findByIdAndUpdate(vendorId, { isAvailable: false });
     
-    // Resolve the pending acceptance promise for this order and vendor.
-    const key = `${orderId}:${vendorId}`;
-    if (pendingAcceptances[key]) {
-      pendingAcceptances[key](true);
-      delete pendingAcceptances[key];
-    }
+    // Clear the vendor list for this order (assignment complete)
+    delete orderVendorLists[orderId];
     
-    // Publish an event to confirm the vendor has accepted the order.
+    // Publish an event that the order has been accepted (optional)
     await eventBus.publish('vendor_accepted_order', {
       orderId,
       vendorId,
       vendorLocation,
-      acceptedAt: updatedOrder.updatedAt
+      acceptedAt: updatedOrder.updatedAt,
+    });
+
+    const deliveryAgent = await DeliveryAgent.findOneAndUpdate({
+      isAvailable: true,
+      currentLocation: {
+        $near: {
+          $geometry: { type: 'Point', coordinates: vendorLocation.coordinates },
+          $maxDistance: 5000 // within 5 km; adjust as needed
+        }
+      }
+    },
+  { isAvailable: false},{new:true});
+  
+  const delivery = deliveryModel.create({order:orderId, agent: deliveryAgent._id,assignedAt: new Date()});    
+    return res.json({ message: 'Order accepted by vendor', order: updatedOrder });
+  } catch (error) {
+    console.error('Error accepting order:', error);
+    return res.status(500).json({ message: 'Error accepting order', error: error.message });
+  }
+};
+
+/**
+ * Deny Order Request API
+ * Expects in req.body:
+ *   - orderId: The ID of the order.
+ *   - vendorId: The vendor's ID that is denying the request.
+ *
+ * Process:
+ *   - Remove the vendor from the saved vendor list for the order.
+ *   - If vendors remain in the list, publish the updated request to the new first vendor.
+ */
+exports.denyOrderRequest = async (req, res) => {
+  try {
+    const { orderId, vendorId } = req.body;
+    
+    let vendors = orderVendorLists[orderId];
+    if (!vendors || vendors.length === 0) {
+      return res.status(404).json({ message: 'No pending vendor list found for this order' });
+    }
+    
+    // Remove the vendor who denied (assume it's the first vendor in the list)
+    // Validate that the denying vendor is indeed the first vendor.
+    if (vendors[0]._id.toString() !== vendorId) {
+      return res.status(400).json({ message: 'Deny request from vendor not currently assigned' });
+    }
+    
+    // Remove the first vendor from the list
+    vendors.shift();
+    
+    // Update the global list
+    orderVendorLists[orderId] = vendors;
+    
+    if (vendors.length === 0) {
+      // No more vendors available
+      return res.status(404).json({ message: 'No vendors left to receive the order request' });
+    }
+    
+    // Publish the updated vendor list to the new first vendor.
+    const newFirstVendor = vendors[0];
+    await eventBus.publish(`order_request_to_vendor_${newFirstVendor._id}`, {
+      orderId,
+      vendorList: vendors.map(v => v._id),
     });
     
-    res.json({ message: 'Order accepted by vendor', order: updatedOrder });
+    return res.json({
+      message: 'Order request denied. Forwarded to next vendor.',
+      vendorList: vendors.map(v => v._id)
+    });
   } catch (error) {
-    console.error('Error accepting order by vendor:', error);
-    res.status(500).json({ message: 'Error accepting order', error: error.message });
+    console.error('Error processing deny order request:', error);
+    return res.status(500).json({ message: 'Error processing deny order request', error: error.message });
+  }
+};
+
+
+// backend/services/vendor-service/src/controllers.js
+
+const redis = require('redis');
+
+/**
+ * SSE endpoint for streaming order requests to the vendor.
+ * This endpoint keeps the connection open so that the vendor continuously
+ * receives new order notifications published to the Redis channel.
+ *
+ * The vendor subscribes to a Redis channel named: `order_request_to_vendor_<vendorId>`
+ * and receives all notifications as they arrive.
+ */
+exports.streamOrderRequests = async (req, res) => {
+  try {
+    const vendorId = req.user._id; // Authenticated vendor ID
+    const channelName = `order_request_to_vendor_${vendorId}`;
+
+    // Set SSE headers to keep the connection alive
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+    res.write('\n'); // Ensures the connection is established
+
+    // Create a new Redis subscriber client for this vendor
+    const redisSub = redis.createClient({
+      url: process.env.REDIS_URI || 'redis://localhost:6379'
+    });
+
+    redisSub.on('error', (err) => {
+      console.error('Redis subscriber error:', err);
+    });
+
+    await redisSub.connect();
+    await redisSub.subscribe(channelName, (message) => {
+      // When a message is received on the vendor's channel, send it via SSE
+      res.write(`data: ${message}\n\n`);
+      // Note: The connection is not closed after sending the message;
+      // it remains open to receive further notifications.
+    });
+
+    // Clean up when the client disconnects
+    req.on('close', () => {
+      console.log(`Vendor ${vendorId} disconnected from SSE.`);
+      redisSub.unsubscribe(channelName);
+      redisSub.quit();
+      res.end();
+    });
+  } catch (error) {
+    console.error('Error in streamOrderRequests:', error);
+    res.status(500).end();
   }
 };

@@ -9,6 +9,7 @@ const DeliverySchema = new Schema({
     enum: ['pending', 'assigned', 'picked_up', 'in_transit', 'delivered', 'canceled'], 
     default: 'pending' 
   },
+  
   assignedAt: { type: Date },
   updatedAt: { type: Date }
 });

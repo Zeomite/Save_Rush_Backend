@@ -21,4 +21,6 @@ cartRouter.delete('/remove/:itemId', cartController.removeItem);
 // Clear the entire cart
 cartRouter.delete('/clear', cartController.clearCart);
 
+cartRouter.post('/checkout', cartController.createOrderFromCart);
+
 module.exports = cartRouter;
