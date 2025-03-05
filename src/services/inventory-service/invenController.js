@@ -1,4 +1,3 @@
-
 const { getCachedDocument, cacheDocument, deleteCachedDocument } = require('../../utils/redisClient');
 const Item = require('./inventoryModel');
 
@@ -7,12 +6,100 @@ const Item = require('./inventoryModel');
  */
 exports.listItems = async (req, res) => {
   try {
-   // Fetch items from MongoDB if not cached
-   const items = await Item.find();
-   res.json({... items});
+    const {
+      minPrice,
+      maxPrice,
+      category,
+      sort,
+      brand,
+      search,
+      page = 1,
+      limit = 10
+    } = req.query;
+
+    // Build cache key based on query parameters
+    const cacheKey = `items:${JSON.stringify({ 
+      minPrice, maxPrice, category, sort, brand, search, page, limit 
+    })}`;
+
+    // Try to get cached results
+    const cachedItems = await getCachedDocument(cacheKey);
+    if (cachedItems) {
+      return res.json({ items: JSON.parse(cachedItems), cached: true });
+    }
+
+    // Build query object
+    let query = {};
+
+    // Price range filter
+    if (minPrice || maxPrice) {
+      query.price = {};
+      if (minPrice) query.price.$gte = Number(minPrice);
+      if (maxPrice) query.price.$lte = Number(maxPrice);
+    }
+
+    // Category filter
+    if (category) {
+      query.category = category;
+    }
+
+    // Brand filter 
+    if (brand) {
+      query.brand = brand;
+    }
+
+    // Text search
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Build sort object
+    let sortQuery = {};
+    if (sort) {
+      const [field, order] = sort.split(':');
+      sortQuery[field] = order === 'desc' ? -1 : 1;
+    } else {
+      // Default sort by createdAt descending
+      sortQuery = { createdAt: -1 };
+    }
+
+    // Calculate pagination
+    const skip = (page - 1) * limit;
+
+    // Execute query with pagination
+    const items = await Item.find(query)
+      .sort(sortQuery)
+      .skip(skip)
+      .limit(Number(limit))
+      .exec();
+
+    // Get total count for pagination
+    const total = await Item.countDocuments(query);
+
+    const response = {
+      items,
+      pagination: {
+        total,
+        page: Number(page),
+        limit: Number(limit),
+        pages: Math.ceil(total / limit)
+      }
+    };
+
+    // Cache the results for 5 minutes
+    await cacheDocument(cacheKey, JSON.stringify(response), 300);
+
+    res.json({ ...response, cached: false });
+
   } catch (error) {
     console.error('Error fetching items:', error);
-    res.status(500).json({ message: 'Error fetching items', error: error.message });
+    res.status(500).json({ 
+      message: 'Error fetching items', 
+      error: error.message 
+    });
   }
 };
 
