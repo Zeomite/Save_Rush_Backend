@@ -6,7 +6,8 @@ const {
   login,
   getProfile,
 updateUser,
-deleteUser
+deleteUser,
+streamVendorAcceptedOrder
 } = require('./userController');
 
 // Public Routes
@@ -17,5 +18,6 @@ userRouter.use(auth);
 userRouter.get('/profile', getProfile);
 userRouter.patch('/update',updateUser)
 userRouter.delete('/delete',deleteUser)
+userRouter.get('/stream-order-requests', streamVendorAcceptedOrder);
 
 module.exports = userRouter;

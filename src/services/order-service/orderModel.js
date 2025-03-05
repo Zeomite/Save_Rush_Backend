@@ -9,15 +9,10 @@ const OrderSchema = new Schema({
   status: { 
     type: String, 
     enum: ['pending', 'vendor_accepted', 'canceled', 'completed'],
-    default: 'pending' 
+    default: ['pending'] 
   },
   // Will be populated once a vendor accepts the order.
   vendor: { type: Schema.Types.ObjectId, ref: 'Vendor' },
-  // Save vendor's location at acceptance time for use in delivery agent selection.
-  vendorLocation: {
-    type: { type: String, default: 'Point' },
-    coordinates: { type: [Number] }
-  }
 },{
   timestamps:true
 });

@@ -209,3 +209,54 @@ exports.updateUser = async (req, res) => {
       res.status(500).json({ message: 'Error deleting user', error: error.message });
     }
   };
+
+
+/**
+ * SSE endpoint to stream a "vendor accepted order" event to the user.
+ * The client should call this endpoint (e.g., GET /api/users/notifications/stream)
+ * optionally with a query parameter orderId. Once an event matching the user (and orderId, if provided)
+ * is received, the server sends the event as JSON and then closes the SSE connection.
+ */
+exports.streamVendorAcceptedOrder = async (req, res) => {
+  try {
+    // Get the current user's ID from the auth middleware.
+    const userId = req.user._id;
+    // Optionally, the client may pass an orderId to filter on.
+    const orderId = req.query.orderId;
+
+    // Set the SSE headers.
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+    // Send an initial comment to establish the stream.
+    res.write(': connected\n\n');
+
+    // Define the callback to handle "vendor_accepted_order" events.
+    const onVendorAccepted = (data) => {
+      // Expecting data to have: { userId, orderId, vendorId, vendorLocation, acceptedAt }
+      // Filter events by matching the userId (and orderId if provided).
+      if (data.userId === userId && (!orderId || data.orderId === orderId)) {
+        // Write the data as an SSE message.
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+        // End the SSE stream after sending the event.
+        res.end();
+        // Unsubscribe from further events.
+        eventBus.unsubscribe('vendor_accepted_order', onVendorAccepted);
+      }
+    };
+
+    // Subscribe to the "vendor_accepted_order" topic.
+    eventBus.subscribe('vendor_accepted_order', onVendorAccepted);
+
+    // If the client disconnects before an event is received, unsubscribe.
+    req.on('close', () => {
+      eventBus.unsubscribe('vendor_accepted_order', onVendorAccepted);
+      res.end();
+    });
+  } catch (error) {
+    console.error('Error in streamVendorAcceptedOrder:', error);
+    res.status(500).end();
+  }
+};

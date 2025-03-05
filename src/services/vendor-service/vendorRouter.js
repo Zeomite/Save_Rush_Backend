@@ -1,11 +1,18 @@
 const express = require('express');
-const vendorRouter = express.Router();
+const router = express.Router();
 const vendorController = require('./vendorController');
+const {auth,authorize} = require('../../middlewares/auth');
 
-// Route for publishing an order request to nearby vendors
-vendorRouter.post('/publish-order-request', vendorController.publishOrderRequest);
+// Endpoint to initiate an order request (generates and publishes the vendor list)
+router.post('/initiate-request', auth, authorize(['vendor']),vendorController.initiateOrderRequest);
 
-// Route for a vendor to accept an order request
-vendorRouter.post('/accept-order-request', vendorController.acceptOrderRequest);
+// Endpoint for a vendor to accept the order request
+router.post('/accept-request', auth, authorize(['vendor']), vendorController.acceptOrderRequest);
 
-module.exports = vendorRouter;
+// Endpoint for a vendor to deny the order request
+router.post('/deny-request', auth, authorize(['vendor']),  vendorController.denyOrderRequest);
+
+// SSE endpoint for continuously streaming order requests to the vendor
+router.get('/stream-order-requests', auth,authorize(['vendor']), vendorController.streamOrderRequests);
+
+module.exports = router;
